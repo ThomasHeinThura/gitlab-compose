@@ -2,6 +2,7 @@ version: '3.8'
 
 networks:
   traefik-public:
+    name: traefik-public
     driver: bridge
   gitlab-internal:
     driver: bridge
@@ -25,7 +26,6 @@ services:
       - --api.dashboard=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=gitlab-stack_traefik-public
       - --entrypoints.web.address=:80
       - --log.level=INFO
     ports:
@@ -105,7 +105,6 @@ services:
         ## ── Disable unused services (save RAM) ──
         prometheus['enable']    = false
         alertmanager['enable']  = false
-        grafana['enable']       = false
         node_exporter['enable'] = false
 
         ## ── SMTP (optional, comment out if not needed) ──
@@ -122,16 +121,18 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=gitlab-stack_traefik-public"
+      - "traefik.docker.network=traefik-public"
 
       # ── GitLab Web UI ──
       - "traefik.http.routers.gitlab.rule=Host(`gitlab.test.domain`)"
       - "traefik.http.routers.gitlab.entrypoints=web"
+      - "traefik.http.routers.gitlab.service=gitlab"
       - "traefik.http.services.gitlab.loadbalancer.server.port=80"
 
       # ── Container Registry ──
       - "traefik.http.routers.registry.rule=Host(`registry.test.domain`)"
       - "traefik.http.routers.registry.entrypoints=web"
+      - "traefik.http.routers.registry.service=registry"
       - "traefik.http.services.registry.loadbalancer.server.port=5050"
 
     networks:
