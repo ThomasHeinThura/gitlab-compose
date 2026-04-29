@@ -20,6 +20,8 @@ What the script does:
 - Copies the CA certificate into `~/.docker/certs.d/registry.test.domain/ca.crt` and `~/.docker/certs.d/gitlab.test.domain/ca.crt`
 - This is required because Docker pushes authenticate against `https://gitlab.test.domain/jwt/auth`, not only `registry.test.domain`
 
+### Optionally,
+
 Browser trust on macOS:
 If you want Safari/Chrome to trust the local certificate without warnings, import the CA into the System keychain:
 ```bash
@@ -69,8 +71,34 @@ docker exec -it gitlab-runner gitlab-runner register \
   --docker-privileged \
   --docker-volumes "/var/run/docker.sock:/var/run/docker.sock" \
   --docker-volumes "/cache" \
-  --docker-pull-policy "if-not-present"
+  --docker-volumes "/etc/gitlab-runner/certs/gitlab.test.domain.crt:/usr/local/share/ca-certificates/local-dev-ca.crt:ro" \
+  --docker-pull-policy "if-not-present" \
+  --docker-extra-hosts "gitlab.test.domain:host-gateway" \
+  --docker-extra-hosts "registry.test.domain:host-gateway"
 ```
+After registration, the runner should appear as active in the GitLab UI.
+This registers a runner that can run DinD (Docker-in-Docker) jobs by mounting the Docker socket and the CA cert for registry authentication.
+
+Create new projects with blank repositories and test CI/CD pipelines with a simple `.gitlab-ci.yml` that builds and pushes to the registry.
+```yml
+# .gitlab-ci.yml example for SAST + Secret Detection with DinD
+stages:
+- test
+- secret-detection
+sast:
+  stage: test
+include:
+- template: Security/SAST.gitlab-ci.yml
+- template: Security/Secret-Detection.gitlab-ci.yml
+variables:
+  SECRET_DETECTION_ENABLED: 'true'
+  DOCKER_HOST: unix:///var/run/docker.sock
+  SAST_EXCLUDED_PATHS: "spec, test, tests, tmp"
+  AUTO_DEVOPS_ENABLED: "false"
+secret_detection:
+  stage: secret-detection
+```
+
 
 ## 6. Container Registry
 Registry is available at: https://registry.test.domain

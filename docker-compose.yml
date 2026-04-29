@@ -5,12 +5,13 @@ networks:
   gitlab-internal:
     driver: bridge
 
+
 volumes:
   gitlab-config:
   gitlab-logs:
   gitlab-data:
   postgresql-data:
-  runner-config:
+
 
 services:
 
@@ -34,13 +35,14 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"   # Traefik dashboard → http://localhost:8080
+      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - ./traefik/certs:/etc/traefik/certs:ro
     networks:
       - traefik-public
+
 
   # ─── POSTGRESQL ─────────────────────────────────────────────────────────────
   postgresql:
@@ -62,6 +64,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
 
   # ─── GITLAB CE ──────────────────────────────────────────────────────────────
   gitlab:
@@ -113,11 +116,8 @@ services:
         alertmanager['enable']  = false
         node_exporter['enable'] = false
 
-        ## ── SMTP (optional, comment out if not needed) ──
-        # gitlab_rails['smtp_enable'] = false
-
     ports:
-      - "2222:22"     # GitLab SSH
+      - "2222:22"
     volumes:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
@@ -128,36 +128,34 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-public"
-
       # ── GitLab Web UI ──
       - "traefik.http.routers.gitlab.rule=Host(`gitlab.test.domain`)"
       - "traefik.http.routers.gitlab.entrypoints=websecure"
       - "traefik.http.routers.gitlab.service=gitlab"
       - "traefik.http.routers.gitlab.tls=true"
       - "traefik.http.services.gitlab.loadbalancer.server.port=80"
-
       # ── Container Registry ──
       - "traefik.http.routers.registry.rule=Host(`registry.test.domain`)"
       - "traefik.http.routers.registry.entrypoints=websecure"
       - "traefik.http.routers.registry.service=registry"
       - "traefik.http.routers.registry.tls=true"
       - "traefik.http.services.registry.loadbalancer.server.port=5050"
-
     networks:
       - traefik-public
       - gitlab-internal
+
 
   # ─── GITLAB RUNNER ──────────────────────────────────────────────────────────
   gitlab-runner:
     image: gitlab/gitlab-runner:latest
     container_name: gitlab-runner
     restart: unless-stopped
-    privileged: true   
+    privileged: true                                    # Required for SAST analyzers
     extra_hosts:
-      - "gitlab.test.domain:host-gateway"        # resolve GitLab UI
-      - "registry.test.domain:host-gateway"      # resolve Container Registry
+      - "gitlab.test.domain:host-gateway"              # Runner container DNS
+      - "registry.test.domain:host-gateway"
     volumes:
-      - ./runner-config:/etc/gitlab-runner 
+      - ./runner-config:/etc/gitlab-runner             # Bind mount (editable directly)
       - ./traefik/certs/local-dev-ca.crt:/etc/gitlab-runner/certs/gitlab.test.domain.crt:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
