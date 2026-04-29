@@ -1,5 +1,3 @@
-version: '3.8'
-
 networks:
   traefik-public:
     name: traefik-public
@@ -26,13 +24,21 @@ services:
       - --api.dashboard=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
       - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
       - --log.level=INFO
     ports:
       - "80:80"
+      - "443:443"
       - "8080:8080"   # Traefik dashboard → http://localhost:8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/certs:/etc/traefik/certs:ro
     networks:
       - traefik-public
 
@@ -66,7 +72,7 @@ services:
     shm_size: '256m'
     environment:
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://gitlab.test.domain'
+        external_url 'https://gitlab.test.domain'
         gitlab_rails['gitlab_shell_ssh_port'] = 2222
 
         ## ── External PostgreSQL ──
@@ -83,23 +89,23 @@ services:
         nginx['listen_port']    = 80
         nginx['listen_https']   = false
         nginx['proxy_set_headers'] = {
-          'X-Forwarded-Proto' => 'http',
-          'X-Forwarded-Ssl'   => 'off'
+          'X-Forwarded-Proto' => 'https',
+          'X-Forwarded-Ssl'   => 'on'
         }
 
         ## ── Container Registry ──
         registry['enable'] = true
-        registry_external_url 'http://registry.test.domain'
+        registry_external_url 'https://registry.test.domain'
         registry_nginx['enable']      = true
         registry_nginx['listen_port'] = 5050
         registry_nginx['listen_https'] = false
         registry_nginx['proxy_set_headers'] = {
-          'X-Forwarded-Proto' => 'http',
-          'X-Forwarded-Ssl'   => 'off'
+          'X-Forwarded-Proto' => 'https',
+          'X-Forwarded-Ssl'   => 'on'
         }
         gitlab_rails['registry_enabled'] = true
         gitlab_rails['registry_host']    = 'registry.test.domain'
-        gitlab_rails['registry_port']    = '80'
+        gitlab_rails['registry_port']    = '443'
         gitlab_rails['registry_path']    = '/var/opt/gitlab/gitlab-rails/shared/registry'
 
         ## ── Disable unused services (save RAM) ──
@@ -125,14 +131,16 @@ services:
 
       # ── GitLab Web UI ──
       - "traefik.http.routers.gitlab.rule=Host(`gitlab.test.domain`)"
-      - "traefik.http.routers.gitlab.entrypoints=web"
+      - "traefik.http.routers.gitlab.entrypoints=websecure"
       - "traefik.http.routers.gitlab.service=gitlab"
+      - "traefik.http.routers.gitlab.tls=true"
       - "traefik.http.services.gitlab.loadbalancer.server.port=80"
 
       # ── Container Registry ──
       - "traefik.http.routers.registry.rule=Host(`registry.test.domain`)"
-      - "traefik.http.routers.registry.entrypoints=web"
+      - "traefik.http.routers.registry.entrypoints=websecure"
       - "traefik.http.routers.registry.service=registry"
+      - "traefik.http.routers.registry.tls=true"
       - "traefik.http.services.registry.loadbalancer.server.port=5050"
 
     networks:
@@ -144,11 +152,13 @@ services:
     image: gitlab/gitlab-runner:latest
     container_name: gitlab-runner
     restart: unless-stopped
+    privileged: true   
     extra_hosts:
       - "gitlab.test.domain:host-gateway"        # resolve GitLab UI
       - "registry.test.domain:host-gateway"      # resolve Container Registry
     volumes:
       - runner-config:/etc/gitlab-runner
+      - ./traefik/certs/local-dev-ca.crt:/etc/gitlab-runner/certs/gitlab.test.domain.crt:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - gitlab
