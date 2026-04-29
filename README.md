@@ -34,7 +34,48 @@ If Docker still shows an x509 error for `https://gitlab.test.domain/jwt/auth` af
 security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain-db traefik/certs/local-dev-ca.crt
 ```
 
+For Linux, 
+Linux Insecure Registry (No Docker Desktop)
+On Linux, there's no keychain or Docker Desktop UI. Edit the daemon config directly:
+
+bash
+sudo nano /etc/docker/daemon.json
+Add the insecure-registries field:
+
+json
+{
+  "insecure-registries": [
+    "registry.test.domain",
+    "gitlab.test.domain"
+  ]
+}
+Then restart Docker:
+
+bash
+sudo systemctl restart docker
+Or if you prefer proper CA trust instead of insecure:
+
+bash
+# Copy CA cert to system trust store
+sudo cp traefik/certs/local-dev-ca.crt /usr/local/share/ca-certificates/local-dev-ca.crt
+
+# Update system CA bundle
+sudo update-ca-certificates
+
+# Copy to Docker's certs.d (for registry specifically)
+sudo mkdir -p /etc/docker/certs.d/registry.test.domain
+sudo mkdir -p /etc/docker/certs.d/gitlab.test.domain
+sudo cp traefik/certs/local-dev-ca.crt /etc/docker/certs.d/registry.test.domain/ca.crt
+sudo cp traefik/certs/local-dev-ca.crt /etc/docker/certs.d/gitlab.test.domain/ca.crt
+
+# Restart Docker
+sudo systemctl restart docker
+On Linux, update-ca-certificates + Docker daemon restart is enough — no keychain needed. This is the cleaner approach than insecure-registries since it actually validates TLS rather than skipping it.
+
+
+
 After generating the certificates, restart Docker Desktop once so Docker reloads trust for both hosts.
+---
 
 ## 3. Start the stack
 ```bash
