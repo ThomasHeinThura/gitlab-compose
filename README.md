@@ -46,8 +46,8 @@ Wait until you see: `gitlab Reconfigured!`
 
 HTTPS checks:
 ```bash
-curl -k https://gitlab.test.domain
-curl -k https://registry.test.domain/v2/
+curl -kI https://gitlab.test.domain
+curl -kI https://registry.test.domain/v2/
 ```
 
 ## 4. Get the initial root password
