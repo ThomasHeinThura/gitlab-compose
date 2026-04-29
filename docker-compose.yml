@@ -1,0 +1,156 @@
+version: '3.8'
+
+networks:
+  traefik-public:
+    driver: bridge
+  gitlab-internal:
+    driver: bridge
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+  postgresql-data:
+  runner-config:
+
+services:
+
+  # ─── TRAEFIK ────────────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --api.insecure=true
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=gitlab-stack_traefik-public
+      - --entrypoints.web.address=:80
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "8080:8080"   # Traefik dashboard → http://localhost:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-public
+
+  # ─── POSTGRESQL ─────────────────────────────────────────────────────────────
+  postgresql:
+    image: postgres:16-alpine
+    container_name: gitlab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gitlabhq_production}
+      POSTGRES_USER: ${POSTGRES_USER:-gitlab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-StrongPass123!}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    networks:
+      - gitlab-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gitlab} -d ${POSTGRES_DB:-gitlabhq_production}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ─── GITLAB CE ──────────────────────────────────────────────────────────────
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: gitlab
+    restart: unless-stopped
+    hostname: gitlab.test.domain
+    shm_size: '256m'
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.test.domain'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+
+        ## ── External PostgreSQL ──
+        postgresql['enable'] = false
+        gitlab_rails['db_adapter']  = 'postgresql'
+        gitlab_rails['db_encoding'] = 'utf8'
+        gitlab_rails['db_host']     = 'postgresql'
+        gitlab_rails['db_port']     = 5432
+        gitlab_rails['db_database'] = 'gitlabhq_production'
+        gitlab_rails['db_username'] = 'gitlab'
+        gitlab_rails['db_password'] = 'StrongPass123!'
+
+        ## ── Nginx behind Traefik ──
+        nginx['listen_port']    = 80
+        nginx['listen_https']   = false
+        nginx['proxy_set_headers'] = {
+          'X-Forwarded-Proto' => 'http',
+          'X-Forwarded-Ssl'   => 'off'
+        }
+
+        ## ── Container Registry ──
+        registry['enable'] = true
+        registry_external_url 'http://registry.test.domain'
+        registry_nginx['enable']      = true
+        registry_nginx['listen_port'] = 5050
+        registry_nginx['listen_https'] = false
+        registry_nginx['proxy_set_headers'] = {
+          'X-Forwarded-Proto' => 'http',
+          'X-Forwarded-Ssl'   => 'off'
+        }
+        gitlab_rails['registry_enabled'] = true
+        gitlab_rails['registry_host']    = 'registry.test.domain'
+        gitlab_rails['registry_port']    = '80'
+        gitlab_rails['registry_path']    = '/var/opt/gitlab/gitlab-rails/shared/registry'
+
+        ## ── Disable unused services (save RAM) ──
+        prometheus['enable']    = false
+        alertmanager['enable']  = false
+        grafana['enable']       = false
+        node_exporter['enable'] = false
+
+        ## ── SMTP (optional, comment out if not needed) ──
+        # gitlab_rails['smtp_enable'] = false
+
+    ports:
+      - "2222:22"     # GitLab SSH
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=gitlab-stack_traefik-public"
+
+      # ── GitLab Web UI ──
+      - "traefik.http.routers.gitlab.rule=Host(`gitlab.test.domain`)"
+      - "traefik.http.routers.gitlab.entrypoints=web"
+      - "traefik.http.services.gitlab.loadbalancer.server.port=80"
+
+      # ── Container Registry ──
+      - "traefik.http.routers.registry.rule=Host(`registry.test.domain`)"
+      - "traefik.http.routers.registry.entrypoints=web"
+      - "traefik.http.services.registry.loadbalancer.server.port=5050"
+
+    networks:
+      - traefik-public
+      - gitlab-internal
+
+  # ─── GITLAB RUNNER ──────────────────────────────────────────────────────────
+  gitlab-runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: gitlab-runner
+    restart: unless-stopped
+    extra_hosts:
+      - "gitlab.test.domain:host-gateway"        # resolve GitLab UI
+      - "registry.test.domain:host-gateway"      # resolve Container Registry
+    volumes:
+      - runner-config:/etc/gitlab-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - gitlab
+    networks:
+      - gitlab-internal
+      - traefik-public
